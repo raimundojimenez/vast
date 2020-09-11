@@ -154,6 +154,7 @@ caf::behavior importer(importer_actor* self, path dir, archive_type archive,
                        caf::actor index, type_registry_type type_registry) {
   VAST_TRACE(VAST_ARG(dir));
   self->state.dir = dir;
+  self->state.congested_batches = 0;
   auto err = self->state.read_state();
   if (err) {
     VAST_ERROR(self, "failed to load state:", self->system().render(err));
@@ -178,6 +179,27 @@ caf::behavior importer(importer_actor* self, path dir, archive_type archive,
       VAST_ASSERT(x->rows() <= static_cast<size_t>(st.available_ids()));
       auto events = x->rows();
       x.unshared().offset(st.next_id(events));
+#if VAST_LOG_LEVEL >= CAF_LOG_LEVEL_DEBUG
+      // We don't want to report minimal congestions, so we're setting a minimum
+      // reporting threshold here.
+      constexpr auto congestion_reporting_threshold = size_t{100};
+      auto is_congested = [&] {
+        for (const auto& mgr : self->stream_managers())
+          if (mgr.second->congested())
+            return true;
+        return false;
+      };
+      if (is_congested()) {
+        if (st.congested_batches == congestion_reporting_threshold)
+          VAST_DEBUG(self, "is currently congested downstream");
+        ++st.congested_batches;
+      } else {
+        if (st.congested_batches > congestion_reporting_threshold)
+          VAST_DEBUG(self, "resolved congestion of", st.congested_batches,
+                     "table slices");
+        st.congested_batches = 0;
+      }
+#endif
       out.push(std::move(x));
       t.stop(events);
     },

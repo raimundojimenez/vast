@@ -111,6 +111,8 @@ struct importer_state {
 
   accountant_type accountant;
 
+  size_t congested_batches;
+
   /// Name of this actor in log events.
   static inline const char* name = "importer";
 };

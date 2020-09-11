@@ -725,9 +725,7 @@ caf::behavior index(caf::stateful_actor<index_state>* self, filesystem_type fs,
     [=](atom::subscribe, atom::flush, const caf::actor& listener) {
       self->state.add_flush_listener(listener);
     },
-    [=](caf::weak_actor_ptr actor) {
-      self->state.node = actor;
-    });
+    [=](caf::weak_actor_ptr actor) { self->state.node = actor; });
   return {
     // The default behaviour
     [=](atom::worker, caf::actor& worker) {
@@ -745,9 +743,7 @@ caf::behavior index(caf::stateful_actor<index_state>* self, filesystem_type fs,
     [=](accountant_type accountant) {
       self->state.accountant = std::move(accountant);
     },
-    [=](caf::weak_actor_ptr actor) {
-      self->state.node = actor;
-    },
+    [=](caf::weak_actor_ptr actor) { self->state.node = actor; },
     [=](atom::status, status_verbosity v) -> caf::config_value::dictionary {
       return self->state.status(v);
     },
