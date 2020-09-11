@@ -123,6 +123,8 @@ struct active_partition_state {
   /// Temporary storage for the serialized indexers of this partition, before
   /// they get written into the flatbuffer.
   std::map<caf::actor_id, vast::chunk_ptr> chunks;
+
+  caf::weak_actor_ptr node;
 };
 
 // TODO: Split this into a `static data` part that can be mmaped

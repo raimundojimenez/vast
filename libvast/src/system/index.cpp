@@ -46,6 +46,7 @@
 #include "vast/system/accountant.hpp"
 #include "vast/system/evaluator.hpp"
 #include "vast/system/filesystem.hpp"
+#include "vast/system/node.hpp"
 #include "vast/system/partition.hpp"
 #include "vast/system/query_supervisor.hpp"
 #include "vast/system/shutdown.hpp"
@@ -431,6 +432,7 @@ caf::behavior index(caf::stateful_actor<index_state>* self, filesystem_type fs,
   self->state.self = self;
   self->state.filesystem = fs;
   self->state.dir = dir;
+  self->state.node = nullptr;
   self->state.delay_flush_until_shutdown = delay_flush_until_shutdown;
   self->state.partition_capacity = partition_capacity;
   self->state.taste_partitions = taste_partitions;
@@ -452,6 +454,12 @@ caf::behavior index(caf::stateful_actor<index_state>* self, filesystem_type fs,
     // index_opts["cardinality"] = partition_capacity;
     auto part
       = self->spawn(active_partition, id, self->state.filesystem, index_opts);
+    if (self->state.node) {
+      self->send(part, self->state.node);
+      self->send(
+        caf::actor_cast<caf::actor>(self->state.node /*.get()->address()*/),
+        atom::put_v, atom::status_v, std::string{"active-partition"}, part);
+    }
     auto slot = self->state.stage->add_outbound_path(part);
     self->state.active_partition.actor = part;
     self->state.active_partition.stream_slot = slot;
@@ -716,6 +724,9 @@ caf::behavior index(caf::stateful_actor<index_state>* self, filesystem_type fs,
     },
     [=](atom::subscribe, atom::flush, const caf::actor& listener) {
       self->state.add_flush_listener(listener);
+    },
+    [=](caf::weak_actor_ptr actor) {
+      self->state.node = actor;
     });
   return {
     // The default behaviour
@@ -733,6 +744,9 @@ caf::behavior index(caf::stateful_actor<index_state>* self, filesystem_type fs,
     },
     [=](accountant_type accountant) {
       self->state.accountant = std::move(accountant);
+    },
+    [=](caf::weak_actor_ptr actor) {
+      self->state.node = actor;
     },
     [=](atom::status, status_verbosity v) -> caf::config_value::dictionary {
       return self->state.status(v);

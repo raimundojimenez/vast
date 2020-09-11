@@ -22,6 +22,8 @@
 #include <caf/expected.hpp>
 #include <caf/settings.hpp>
 
+#include "caf/fwd.hpp"
+
 namespace vast::system {
 
 maybe_actor spawn_index(node_actor* self, spawn_arguments& args) {
@@ -42,6 +44,7 @@ maybe_actor spawn_index(node_actor* self, spawn_arguments& args) {
                   opt("system.taste-partitions", sd::taste_partitions),
                   opt("system.query-supervisors", sd::num_query_supervisors),
                   opt("system.disable-recoverability", false));
+  self->send(idx, caf::actor_cast<caf::weak_actor_ptr>(self));
   if (auto accountant = self->state.registry.find_by_label("accountant"))
     self->send(idx, caf::actor_cast<accountant_type>(accountant));
   return idx;

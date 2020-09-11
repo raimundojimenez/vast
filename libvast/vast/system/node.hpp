@@ -67,6 +67,9 @@ struct node_state {
   /// Counters for multi-instance components.
   std::unordered_map<std::string, uint64_t> label_counters;
 
+  /// Additional actors that also contribute to the status output.
+  detail::stable_map<std::string, caf::actor> additional_status_actors;
+
   /// Gives the actor a recognizable name in log files.
   std::string name;
 };

@@ -21,6 +21,7 @@
 #include "vast/concept/printable/vast/table_slice.hpp"
 #include "vast/concept/printable/vast/uuid.hpp"
 #include "vast/detail/assert.hpp"
+#include "vast/detail/fill_status_map.hpp"
 #include "vast/expression.hpp"
 #include "vast/expression_visitors.hpp"
 #include "vast/fbs/partition.hpp"
@@ -32,9 +33,11 @@
 #include "vast/logger.hpp"
 #include "vast/qualified_record_field.hpp"
 #include "vast/save.hpp"
+#include "vast/status.hpp"
 #include "vast/system/filesystem.hpp"
 #include "vast/system/index.hpp"
 #include "vast/system/indexer_stage_driver.hpp"
+#include "vast/system/node.hpp"
 #include "vast/system/shutdown.hpp"
 #include "vast/system/terminate.hpp"
 #include "vast/table_slice_column.hpp"
@@ -401,7 +404,15 @@ active_partition(caf::stateful_actor<active_partition_state>* self, uuid id,
         auto& idx = self->state.indexers[qf];
         if (!idx) {
           self->state.combined_layout.fields.push_back(as_record_field(qf));
-          idx = self->spawn(active_indexer, field.type, index_opts);
+          auto name = "indexer:" + qf.fqn();
+          for (auto& c : name)
+            if (c == '.')
+              c = '_';
+          idx = self->spawn(active_indexer, name, field.type, index_opts);
+          if (self->state.node) {
+            self->send(caf::actor_cast<caf::actor>(self->state.node),
+                       atom::put_v, atom::status_v, name, idx);
+          }
           auto slot = self->state.stage->add_outbound_path(idx);
           self->state.stage->out().set_filter(slot, qf);
           VAST_DEBUG(self, "spawned new indexer for field", field.name,
@@ -455,6 +466,8 @@ active_partition(caf::stateful_actor<active_partition_state>* self, uuid id,
     for ([[maybe_unused]] auto& [_, idx] : self->state.indexers) {
       indexers.push_back(idx);
       indexer_ids.push_back(idx->id());
+      self->send(caf::actor_cast<caf::actor>(self->state.node), atom::erase_v,
+                 atom::status_v, idx);
     }
     self->state.indexers.clear();
     shutdown<policy::parallel>(self, std::move(indexers));
@@ -539,7 +552,16 @@ active_partition(caf::stateful_actor<active_partition_state>* self, uuid id,
       return;
     },
     [=](const expression& expr) { return self->state.evaluate(expr); },
-  };
+    [=](caf::weak_actor_ptr node) { self->state.node = node; },
+    [=](atom::status, status_verbosity v) -> caf::settings {
+      auto result = caf::settings{};
+      auto& partition_status
+        = caf::put_dictionary(result, "active-partitition");
+      if (v >= status_verbosity::debug) {
+        detail::fill_status_map(partition_status, self);
+      }
+      return result;
+    }};
 }
 
 caf::behavior

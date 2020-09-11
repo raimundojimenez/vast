@@ -235,6 +235,9 @@ struct index_state {
   /// Actor handle of the filesystem actor.
   filesystem_type filesystem;
 
+  /// Actor handle to the node.
+  caf::weak_actor_ptr node;
+
   static inline const char* name = "index";
 };
 

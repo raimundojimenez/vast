@@ -20,10 +20,12 @@
 #include "vast/concept/printable/vast/type.hpp"
 #include "vast/defaults.hpp"
 #include "vast/detail/assert.hpp"
+#include "vast/detail/fill_status_map.hpp"
 #include "vast/expression.hpp"
 #include "vast/fwd.hpp"
 #include "vast/logger.hpp"
 #include "vast/path.hpp"
+#include "vast/status.hpp"
 #include "vast/system/accountant.hpp"
 #include "vast/system/instrumentation.hpp"
 #include "vast/system/partition.hpp"
@@ -80,8 +82,9 @@ caf::behavior passive_indexer(caf::stateful_actor<indexer_state>* self,
 }
 
 caf::behavior active_indexer(caf::stateful_actor<indexer_state>* self,
-                             type index_type, caf::settings index_opts) {
-  self->state.name = "indexer-" + to_string(index_type);
+                             const std::string& name, type index_type,
+                             caf::settings index_opts) {
+  self->state.name = name;
   self->state.has_skip_attribute = vast::has_skip_attribute(index_type);
   return {
     [=](caf::stream<table_slice_column> in) {
@@ -150,7 +153,14 @@ caf::behavior active_indexer(caf::stateful_actor<indexer_state>* self,
     [=](atom::shutdown) {
       self->quit(caf::exit_reason::user_shutdown); // clang-format fix
     },
-  };
+    [=](atom::status, status_verbosity v) -> caf::settings {
+      auto result = caf::settings{};
+      auto& indexer_status = caf::put_dictionary(result, self->state.name);
+      if (v >= status_verbosity::debug) {
+        detail::fill_status_map(indexer_status, self);
+      }
+      return result;
+    }};
 }
 
 } // namespace vast::system

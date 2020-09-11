@@ -142,11 +142,15 @@ void collect_component_status(node_actor* self,
     req_state->rp.deliver(to_string(to_json(req_state->content)));
   };
   // Send out requests and collects answers.
+  std::vector<std::pair<std::string, caf::actor>> status_components;
   for (auto& [label, component] : self->state.registry.components())
+    status_components.emplace_back(label, component.actor);
+  for (auto& [label, actor] : self->state.additional_status_actors)
+    status_components.emplace_back(label, actor);
+  for (auto& [label, actor] : status_components)
     self
       ->request<message_priority::high>(
-        component.actor, defaults::system::initial_request_timeout,
-        atom::status_v, v)
+        actor, defaults::system::initial_request_timeout, atom::status_v, v)
       .then(
         [=, lab = label](caf::config_value::dictionary& xs) mutable {
           merge_settings(xs, req_state->content);
@@ -157,6 +161,9 @@ void collect_component_status(node_actor* self,
         [=, lab = label](caf::error& err) mutable {
           VAST_WARNING(self, "failed to retrieve", lab,
                        "status:", to_string(err));
+          // TODO: If we use `put_dictionary` here, we can let components insert
+          // itself hierarchically by using a name like `index.partition.foo` as
+          // key.
           auto& dict = req_state->content[self->state.name].as_dictionary();
           dict.emplace(std::move(lab), to_string(err));
           // Both handlers have a copy of req_state.
@@ -488,6 +495,15 @@ caf::behavior node(node_actor* self, std::string name, path dir,
         return make_error(ec::unspecified, "failed to add component");
       self->monitor(component);
       return atom::ok_v;
+    },
+    [=](atom::put, atom::status, const std::string& label, const actor& actor) {
+      self->state.additional_status_actors[label] = actor;
+    },
+    [=](atom::erase, atom::status, caf::actor actor) {
+      auto& actors = self->state.additional_status_actors;
+      auto it = std::find_if(actors.begin(), actors.end(),
+                             [&](auto& kv) { return kv.second == actor; });
+      self->state.additional_status_actors.erase(it);
     },
     [=](atom::get, atom::type, const std::string& type) {
       return self->state.registry.find_by_type(type);
