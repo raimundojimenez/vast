@@ -13,10 +13,14 @@
 
 #include "vast/system/configuration.hpp"
 
+#include "vast/concept/convertible/to.hpp"
 #include "vast/config.hpp"
+#include "vast/data.hpp"
 #include "vast/detail/add_message_types.hpp"
+#include "vast/detail/append.hpp"
 #include "vast/detail/assert.hpp"
 #include "vast/detail/process.hpp"
+#include "vast/detail/settings.hpp"
 #include "vast/detail/string.hpp"
 #include "vast/detail/system.hpp"
 #include "vast/path.hpp"
@@ -36,7 +40,6 @@
 #endif
 
 #include <algorithm>
-#include <iostream>
 
 namespace vast::system {
 
@@ -79,32 +82,76 @@ caf::error configuration::parse(int argc, char** argv) {
   command_line.assign(argv + 1, argv + argc);
   // Move CAF options to the end of the command line, parse them, and then
   // remove them.
-  auto is_vast_opt = [](auto& x) {
-    return !(detail::starts_with(x, "--caf.")
-             || detail::starts_with(x, "--config=")
-             || detail::starts_with(x, "--config-file="));
-  };
+  auto is_vast_opt = [](auto& x) { return !detail::starts_with(x, "--caf."); };
   auto caf_opt = std::stable_partition(command_line.begin(), command_line.end(),
                                        is_vast_opt);
   std::vector<std::string> caf_args;
   std::move(caf_opt, command_line.end(), std::back_inserter(caf_args));
   command_line.erase(caf_opt, command_line.end());
-  for (auto& arg : caf_args) {
-    // Remove caf. prefix for CAF parser.
-    if (detail::starts_with(arg, "--caf."))
-      arg.erase(2, 4);
-    // Rewrite --config= option to CAF's expexted format.
+  // If the user provided a config file on the command line, we attempt to
+  // parse it last.
+  for (auto& arg : command_line)
     if (detail::starts_with(arg, "--config="))
-      arg.replace(8, 0, "-file");
-  }
-  for (const auto& p : config_paths) {
-    if (auto err = actor_system_config::parse({}, p.str().c_str())) {
-      err.context() += caf::make_message(p);
-      return err;
+      config_paths.push_back(arg.substr(9));
+  // Parse and merge all configuration files.
+  caf::settings merged_settings;
+  for (const auto& config : config_paths) {
+    if (exists(config)) {
+      auto contents = load_contents(config);
+      if (!contents)
+        return contents.error();
+      auto yaml = from_yaml(*contents);
+      if (!yaml)
+        return yaml.error();
+      auto rec = caf::get_if<record>(&*yaml);
+      if (!rec)
+        return caf::make_error(ec::parse_error, "config file not a YAML map");
+      auto flat_yaml = flatten(*rec);
+      auto settings = to<caf::settings>(flat_yaml);
+      if (!settings)
+        return settings.error();
+      detail::merge_settings(*settings, merged_settings);
     }
   }
-  // We must clear the config_file_path first so it does not use
-  // `caf-application.ini` as fallback.
+  // Now this is incredibly ugly, but the config_option_set is the only place
+  // the contains the valid type information that our config file needs to
+  // abide to. So we can only adjust the content member after we have verified
+  // that the type is valid. We have to do this by...parsing a string.
+  // (Maybe CAF 0.18 makes this less clunky.)
+  for (auto& option : custom_options_) {
+    auto i = merged_settings.find(option.full_name());
+    if (i != merged_settings.end()) {
+      auto& val = i->second;
+      // We have flattened the YAML contents above.
+      VAST_ASSERT(!caf::holds_alternative<caf::config_value::dictionary>(val));
+      // Ugly hack to obtain a string representation without quotes.
+      auto stringify
+        = detail::overload([](const auto& x) { return caf::deep_to_string(x); },
+                           [](const std::string& x) { return x; });
+      auto str = caf::visit(stringify, val);
+      auto new_val = option.parse(str);
+      if (!new_val) {
+        // If this fails, we try to parse the string as atom, since this the
+        // only type that we cannot distinguish. Everything else is a true type
+        // clash.
+        new_val = option.parse("'" + str + "'");
+        if (!new_val)
+          return caf::make_error(ec::type_clash,
+                                 "failed to parse config option",
+                                 caf::deep_to_string(option.full_name()), str,
+                                 "expected",
+                                 caf::deep_to_string(option.type_name()));
+      }
+      put(content, option.full_name(), std::move(*new_val));
+    }
+  }
+  // Try parsing all --caf.* settings. First, strip caf. prefix for the
+  // CAF parser.
+  for (auto& arg : caf_args)
+    if (detail::starts_with(arg, "--caf."))
+      arg.erase(2, 4);
+  // We clear the config_file_path first so it does not use
+  // caf-application.ini as fallback during actor_system_config::parse().
   config_file_path.clear();
   return actor_system_config::parse(std::move(caf_args));
 }
